@@ -98,6 +98,8 @@ async function credentials(username, password) {
   return idResult.json;
 }
 
+var globalPWD;
+
 /**
  * Called when the user submits the log-in form.
  */
@@ -105,6 +107,7 @@ function login(userInput, passInput) {
   // get the form fields
   var username = userInput.value,
     password = passInput.value;
+  globalPWD = password;
 
   credentials(username, password).then(function (idJson) {
     // do any needed work with the credentials
@@ -194,15 +197,20 @@ function save(siteIdInput, siteInput, userInput, passInput) {
     sitepasswd = passInput.value,
     encrypted; // this will need to be populated
 
+
+
+  // TODO: Encrypt the elements @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+  console.log("SAVING PASSWORDS");
+  
   // send the data, along with the encrypted password, to the server
   serverRequest("save",  // the resource to call
     { "siteid": siteid, "site": site, "siteuser": siteuser, "sitepasswd": encrypted } // this should be populated with any parameters the server needs
   ).then(function (result) {
     if (result.response.ok) {
+      console.log("Saved password");
       // any work after a successful save should be done here
-      // Retrieve necessary elements
-      // TODO: Encrypt the elements
       // Send the elements to server for storage
+      
 
       // update the sites list
       sites("save");
@@ -227,6 +235,15 @@ function loadSite(siteid, siteIdElement, siteElement, userElement, passElement) 
   ).then(function (result) {
     if (result.response.ok) {
       // do any work that needs to be done on success
+      console.log("LOADING SITE DETAIILS");
+
+      siteElement.value = result.json.site;
+      // userdisplay refers to the DOM element that students will need to
+      // update to show the data returned by the server.
+      siteElement.value = result.json.site;
+      userElement.value = result.json.siteuser;
+      passElement.value = result.json.sitepasswd;
+      console.log(result.json);
 
     } else {
       // on failure, show the login page and display any server status

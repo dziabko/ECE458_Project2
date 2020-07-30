@@ -182,6 +182,8 @@ function login(&$request, &$response, &$db) {
   $username = $request->param("username"); // The username with which to log in
   $password = $request->param("password"); // The password with which to log in
 
+  // TODO: HASH PASSWORD@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
   $fullname = "Default Full Name";
 
 
@@ -195,7 +197,8 @@ function login(&$request, &$response, &$db) {
   $stm = $db->query('SELECT * FROM user WHERE username="'.$username.'" AND passwd="'.$password.'"');
 
   $result = $stm->fetchObject();
-  log_to_console("PRINTING RESULT");
+  log_to_console("Printing results for");
+  log_to_console($username);
   log_to_console(serialize($result));
   log_to_console($result->email);
 
@@ -208,6 +211,7 @@ function login(&$request, &$response, &$db) {
   // echo "@@@@@@@@@@@@@@@@@@@@@@BLAHHHHH\n";
   // log_to_console($result->fetchArray(SQLITE3_ASSOC));
 
+  // If password and username dont match or dont exist
   if ($result->username == null) {
     log_to_console("USER DOESN't EXIST");
     $response->set_http_code(401); // OK
@@ -219,29 +223,29 @@ function login(&$request, &$response, &$db) {
     $response->set_http_code(200); // Unauthorized user
     $response->set_data("fullname", $fullname); // Return the full name to the client for display
     $response->success("Successfully logged in.");
+
+    // SQL insert new user into user_session table
+    $sessionID = random_bytes(255);
+    $sql = 'INSERT into user_session (sessionid, username, expires) VALUES(:session_id,:user_name,:expires)';
+    $stmt = $db->prepare($sql);
+    // $stmt->bindValue(':session_id', $sessionID, SQLITE3_TEXT);
+    // $stmt->bindValue(':user_name', $username, SQLITE3_TEXT);
+    // $stmt->bindValue(':expires', date("Y-m-d H:i:s", 0), SQLITE3_TEXT);
+    $stmt->execute([
+      ':session_id' => $sessionID,
+      ':user_name' => $username,
+      ":expires" => date("Y-m-d H:i:s", 0)
+    ]);
+    // $stmt->execute();
+
+
+    $relative_time = 1000000000;
+    // Create & send a cookie to the client
+    $response->add_cookie("user_session_cookie", $sessionID, time() + $relative_time);
+
     log_to_console("Session created.");
     return true;
   }
-  // print_r("TEST");
-  // print_r($result);
-
-  // $res = $stm->execute([$username, $password]);
-  // foreach ($stm as $row) {
-    // echo $row;
-  // }
-  // $num_rows = sqlite_num_rows($res);
-
-  // if ($num_rows > 0) {
-  //   log_to_console("USER EXISTS");
-  // }else {
-  //   log_to_console("USER DOESNT EXISTS");
-  // }
-
-  // print_r($res);
-  // $row = $res->fetchArray(SQLITE3_NUM);
-  // $msg1 = "{$row[0]} {$row[1]} {$row[2]}";
-  // log_to_console($msg1);
-
 
   // log_to_console($res);
 
@@ -263,14 +267,101 @@ function login(&$request, &$response, &$db) {
  * If the session is invalid, it should return 401 unauthorized.
  */
 function sites(&$request, &$response, &$db) {
-  $sites = array();
+  // Retreive the sites associated with the current logged in user
+  $cookie = $request->cookie("user_session_cookie"); // Get the user session cookie
 
-  $response->set_data("sites", $sites); // return the sites array to the client
-  $response->set_http_code(200);
-  $response->success("Sites with recorded passwords.");
-  log_to_console("Found and returned sites");
+  if ($cookie) {
+    // First get the username from session cookie
 
-  return true;
+
+    // @@@@@
+    // log_to_console('SELECT username FROM user_session WHERE sessionid="'.$cookie.'"');
+    // WORKS SOME OF THE TIME
+    // $results = $db->query('SELECT username FROM user_session WHERE sessionid="'.$cookie.'"');
+
+    $sql = 'SELECT username FROM user_session WHERE sessionid=:session_id';
+    $results = $db->prepare($sql);
+    $results->execute([
+      ':session_id' => $cookie
+    ]);
+
+
+    // log_to_console('SELECT site FROM user_safe WHERE username="'.$username.'"');
+
+    $result = $results->fetchObject();
+    log_to_console("PRINTING RESULT for ");
+    log_to_console($result->username);
+    log_to_console(serialize($result));
+
+    // GOT USERNAME@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+    // GET site from user_safe using username
+
+
+    $sql = 'SELECT * FROM user_safe WHERE username=:user_name';
+    $results = $db->prepare($sql);
+    $results->execute([
+      ':user_name' => $result->username
+    ]);
+
+    log_to_console("PRINTING SITE RESULTS for ");
+
+    // $blah_sites = [];
+    $blah_sites = array();
+    $blah_siteIDs = array();
+    while ($row = $results->fetch(\PDO::FETCH_ASSOC)) {
+      array_push($blah_sites, $row['site']);
+      array_push($blah_siteIDs, $row['siteid']);
+    }
+
+    log_to_console(serialize($blah_sites));
+
+
+
+
+    // log_to_console($results);
+
+    // $fullname = $result->fullname;
+
+    // $sites = array(
+    //   "www.google.com"
+    // );
+    $sites = $blah_sites;
+
+    // $siteids = array(
+    //   5
+    // );
+    $siteids = $blah_siteIDs;
+
+    // while ($row = $results->fetchObject()) {
+    //   log_to_console("Adding row");
+    //   $sites[] = [
+    //     'siteids' => $row->siteid,
+    //     'sites' => $row->site
+    //   ];
+    // }
+
+    // log_to_console(serialize($sites));
+
+    // while ($row = $results->fetchArray()) {
+    //   log_to_console($row);
+    // }
+    
+
+    $response->set_data("sites", $sites); // return the sites array to the client
+    $response->set_data("siteids", $siteids); // return the sites array to the client
+    $response->set_http_code(200);
+    $response->success("Sites with recorded passwords.");
+    log_to_console("Found and returned sites");
+
+    return true;
+
+  } else {
+    $response->set_http_code(401);
+    $response->failure("Unauthorize session.");
+    log_to_console("Unauthorized session");
+
+    return false;
+  }
       
 }
 
@@ -283,6 +374,16 @@ function save(&$request, &$response, &$db) {
   $site       = $request->param("site");
   $siteuser   = $request->param("siteuser");
   $sitepasswd = $request->param("sitepasswd");
+
+  // SQL insert new user into user table
+  $sql = 'INSERT into user_safe (site, siteuser, sitepasswd) VALUES(:site,:siteuser,:sitepasswd)';
+  $stmt = $db->prepare($sql);
+  $stmt->execute([
+    ':site' => $site,
+    ':siteuser' => $siteuser,
+    ':sitepasswd' => $sitepasswd,
+  ]);
+  
 
   $response->set_http_code(200); // OK
   $response->success("Save to safe succeeded.");
@@ -297,15 +398,46 @@ function save(&$request, &$response, &$db) {
  * If the session is invalid return 401, if the site doesn't exist return 404.
  */
 function load(&$request, &$response, &$db) {
-  $site = $request->param("site");
+  // Retreive the sites associated with the current logged in user
+  $cookie = $request->cookie("user_session_cookie"); // Get the user session cookie
 
-  $response->set_data("site", $site);
+  if ($cookie) {
+    // Get the site data from user_safe table using sideid from request
+    $siteid = $request->param("siteid");
 
-  $response->set_http_code(200); // OK
-  $response->success("Site data retrieved.");
-  log_to_console("Successfully retrieved site data");
+    // Query DB with siteid
+    $stm = $db->query('SELECT * FROM user_safe WHERE siteid="'.$siteid.'"');
 
-  return true;
+
+    $result = $stm->fetchObject();
+    log_to_console(serialize($result));
+  
+    // $fullname = $result->fullname;
+
+    // TODO: ENCRYPT SITE INFORMATION@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+    // $site = $request->param("site");
+    $site = $result->site;
+    $response->set_data("site", $site);
+    // $siteuser = $request->param("siteuser");
+    $siteuser = $result->siteuser;
+    $response->set_data("siteuser", $siteuser);
+    // $sitepasswd = $request->param("sitepasswd");
+    $sitepasswd = $result->sitepasswd;
+    $response->set_data("sitepasswd", $sitepasswd);
+
+    $response->set_http_code(200); // OK
+    $response->success("Site data retrieved.");
+    log_to_console("Successfully retrieved site data");
+
+    return true;
+
+  } else {
+    $response->set_http_code(401);
+    $response->failure("Unauthorize session.");
+    log_to_console("Unauthorized session");
+
+    return false;
+  }
 }
 
 /**
