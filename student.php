@@ -137,15 +137,34 @@ function signup(&$request, &$response, &$db) {
   $email    = $request->param("email");    // The requested email address from the client
   $fullname = $request->param("fullname"); // The requested full name from the client
 
+  $salt = random_bytes(8);
+  $c = 4096;
+  $len = 256;
+
+
+  $hashed_pwd_hex_tag = pbkdf2(sha256, $password, $salt, $c , $len);
+
+
+
   // SQL insert new user into user table
   $sql = 'INSERT into user (username, passwd, email, fullname) VALUES(:user_name,:pass_wd,:email,:full_name)';
   $stmt = $db->prepare($sql);
   $stmt->execute([
     ':user_name' => $username,
-    ':pass_wd' => $password,
+    ':pass_wd' => $hashed_pwd_hex_tag,
     ':email' => $email,
     ':full_name' => $fullname,
   ]);
+
+  // SQL insert user's salt in user_login
+  $sql = 'INSERT into user_login (username, salt) VALUES(:user_name,:salt)';
+  $stmt = $db->prepare($sql);
+  $stmt->execute([
+    ':user_name' => $username,
+    ':salt' => $salt,
+  ]);
+
+
 
   
   // Respond with a message of success.
@@ -154,6 +173,44 @@ function signup(&$request, &$response, &$db) {
   log_to_console("Account created.");
 
   return true;
+}
+
+function pbkdf2($algorithm, $password, $salt, $count, $key_length, $raw_output = false)
+{
+    $algorithm = strtolower($algorithm);
+    if(!in_array($algorithm, hash_algos(), true))
+        trigger_error('PBKDF2 ERROR: Invalid hash algorithm.', E_USER_ERROR);
+    if($count <= 0 || $key_length <= 0)
+        trigger_error('PBKDF2 ERROR: Invalid parameters.', E_USER_ERROR);
+
+    if (function_exists("hash_pbkdf2")) {
+        // The output length is in NIBBLES (4-bits) if $raw_output is false!
+        if (!$raw_output) {
+            $key_length = $key_length * 2;
+        }
+        return hash_pbkdf2($algorithm, $password, $salt, $count, $key_length, $raw_output);
+    }
+
+    $hash_length = strlen(hash($algorithm, "", true));
+    $block_count = ceil($key_length / $hash_length);
+
+    $output = "";
+    for($i = 1; $i <= $block_count; $i++) {
+        // $i encoded as 4 bytes, big endian.
+        $last = $salt . pack("N", $i);
+        // first iteration
+        $last = $xorsum = hash_hmac($algorithm, $last, $password, true);
+        // perform the other $count - 1 iterations
+        for ($j = 1; $j < $count; $j++) {
+            $xorsum ^= ($last = hash_hmac($algorithm, $last, $password, true));
+        }
+        $output .= $xorsum;
+    }
+
+    if($raw_output)
+        return substr($output, 0, $key_length);
+    else
+        return bin2hex(substr($output, 0, $key_length));
 }
 
 
@@ -192,9 +249,22 @@ function login(&$request, &$response, &$db) {
   // $stm = $db->prepare('SELECT * from user WHERE username=? AND passwd=?');
   // $stm->bindValue(':userName', $username);
   // $stm->bindValue(':pass_wd', $password);
+  
+  // Hash the inputted password with the salt
+  $stm = $db->query('SELECT * FROM user_login WHERE username="'.$username.'"');
+  $result = $stm->fetchObject();
+
+  $salt = $result->salt;
+  $c = 4096;
+  $len = 256;
+
+  $hashed_pwd_hex_tag = pbkdf2(sha256, $password, $salt, $c , $len);
+
+  log_to_console("Printing hashed password");
+  log_to_console($hashed_pwd_hex_tag);
 
   // @@@@@
-  $stm = $db->query('SELECT * FROM user WHERE username="'.$username.'" AND passwd="'.$password.'"');
+  $stm = $db->query('SELECT * FROM user WHERE username="'.$username.'" AND passwd="'.$hashed_pwd_hex_tag.'"');
 
   $result = $stm->fetchObject();
   log_to_console("Printing results for");
