@@ -171,6 +171,14 @@ function signup(&$request, &$response, &$db) {
   $c = 4096;
   $len = 256;
 
+  // Check inputs for spaces before peforming SQL statement (don't need to check password b/c it's hashed before injected)
+  if (preg_match('/\s/',$username) || preg_match('/\s/',$email)) {
+    $response->set_http_code(400);
+    $response->failure("Failed to signup");
+    log_to_console("Password input contains spaces");
+    return false;
+  }
+
 
   // Hash the inputted password & save the tag
   $hashed_pwd_hex_tag = pbkdf2(sha256, $password, $salt, $c , $len);
@@ -281,6 +289,14 @@ function login(&$request, &$response, &$db) {
   $username = $request->param("username"); // The username with which to log in
   $password = $request->param("password"); // The hashed inputted password with challenge => hash(hash(pwd) || challenge)
   $fullname = "Default Full Name";
+
+  // Check inputs for spaces before peforming SQL statement (don't need to check password b/c it's hashed before injected)
+  if (preg_match('/\s/',$username)) {
+    $response->set_http_code(400);
+    $response->failure("Failed to login");
+    log_to_console("Username contains spaces");
+    return false;
+  }
 
   // Find the user's info with the username
   $stm = $db->query('SELECT * FROM user WHERE username="'.$username.'"');

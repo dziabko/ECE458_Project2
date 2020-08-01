@@ -216,6 +216,13 @@ function signup(userInput, passInput, passInput2, emailInput, fullNameInput) {
 
         // go to the login page
         showContent("login");
+      } else {
+        // Ensure password is long enough
+        let signup = document.getElementById("signup");
+
+        var errorText = document.createElement("div");
+        errorText.innerText = "Please no spaces in your username or email";
+        signup.appendChild(errorText)
       }
       // show the status message from the server
       serverStatus(result);
