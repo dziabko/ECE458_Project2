@@ -119,11 +119,40 @@
  * resource from being called.
  */
 function preflight(&$request, &$response, &$db) {
-  $response->set_http_code(200);
-  $response->success("Request OK");
-  log_to_console("OK");
 
-  return true;
+  $cookie = $request->cookie("user_session_cookie"); // Get the user session cookie
+
+  if (!$cookie) {
+    $response->set_http_code(200);
+    $response->success("Request Ok");
+    log_to_console("Ok");
+
+    return true;
+  }
+
+  // Get the user's session info
+  $stm = $db->query('SELECT * FROM user_session WHERE sessionid="'.$cookie.'"');
+
+  $result = $stm->fetchObject();
+  $sessionID = $result->sessionid;
+  $expiresDate = strtotime($result->expires);
+
+  // Check if the user session has expired
+  if ($expiresDate < time()) {
+    $fullname = $result->fullname;
+    $response->set_http_code(401);
+    $response->success("Expired session");
+    log_to_console("Expired session.");
+
+    return false;
+  }else {
+    $fullname = $result->fullname;
+    $response->set_http_code(200);
+    $response->success("Request Ok");
+    log_to_console("Ok");
+
+    return true;
+  }
 }
 
 /**
@@ -137,14 +166,14 @@ function signup(&$request, &$response, &$db) {
   $email    = $request->param("email");    // The requested email address from the client
   $fullname = $request->param("fullname"); // The requested full name from the client
 
-  $salt = random_bytes(8);
+  // Random salt of 8b
+  $salt = random_int(0, 256);
   $c = 4096;
   $len = 256;
 
 
+  // Hash the inputted password & save the tag
   $hashed_pwd_hex_tag = pbkdf2(sha256, $password, $salt, $c , $len);
-
-
 
   // SQL insert new user into user table
   $sql = 'INSERT into user (username, passwd, email, fullname) VALUES(:user_name,:pass_wd,:email,:full_name)';
@@ -163,9 +192,6 @@ function signup(&$request, &$response, &$db) {
     ':user_name' => $username,
     ':salt' => $salt,
   ]);
-
-
-
   
   // Respond with a message of success.
   $response->set_http_code(201); // Created
@@ -177,42 +203,40 @@ function signup(&$request, &$response, &$db) {
 
 function pbkdf2($algorithm, $password, $salt, $count, $key_length, $raw_output = false)
 {
-    $algorithm = strtolower($algorithm);
-    if(!in_array($algorithm, hash_algos(), true))
-        trigger_error('PBKDF2 ERROR: Invalid hash algorithm.', E_USER_ERROR);
-    if($count <= 0 || $key_length <= 0)
-        trigger_error('PBKDF2 ERROR: Invalid parameters.', E_USER_ERROR);
+  $output = "";
+  log_to_console("HASHING BLOCK");
+    $last = $salt . "1";
+    // first iteration
+    $last = $xorsum = hash('sha256', $last . $password, true);
+    $xorsum = "0000000000000000000000000000000000000000000000000000000000000000";
+    // perform the other $count - 1 iterations
+    for ($j = 1; $j < $count; $j++) {
+      $last = hash('sha256', bin2hex($last) . $password, true);
 
-    if (function_exists("hash_pbkdf2")) {
-        // The output length is in NIBBLES (4-bits) if $raw_output is false!
-        if (!$raw_output) {
-            $key_length = $key_length * 2;
-        }
-        return hash_pbkdf2($algorithm, $password, $salt, $count, $key_length, $raw_output);
+      // ASCII
+      $xorsum = XOR_hex($xorsum, bin2hex($last));
     }
+    $output .= $last;
 
-    $hash_length = strlen(hash($algorithm, "", true));
-    $block_count = ceil($key_length / $hash_length);
-
-    $output = "";
-    for($i = 1; $i <= $block_count; $i++) {
-        // $i encoded as 4 bytes, big endian.
-        $last = $salt . pack("N", $i);
-        // first iteration
-        $last = $xorsum = hash_hmac($algorithm, $last, $password, true);
-        // perform the other $count - 1 iterations
-        for ($j = 1; $j < $count; $j++) {
-            $xorsum ^= ($last = hash_hmac($algorithm, $last, $password, true));
-        }
-        $output .= $xorsum;
-    }
-
-    if($raw_output)
-        return substr($output, 0, $key_length);
-    else
-        return bin2hex(substr($output, 0, $key_length));
+    return substr($xorsum, 0, $key_length);
 }
 
+function XOR_hex($a, $b) {
+  $res = "";
+  $i = strlen($a);
+  $j = strlen($b); 
+
+  if ($i < $j) {
+    for ($x = 0; $x < $i; $x++) {
+      $res .= dechex(hexdec($a[$x]) ^ hexdec($b[$x]));
+    }
+  }else {
+    for ($x = 0; $x < $j; $x++) {
+      $res .= dechex(hexdec($a[$x]) ^ hexdec($b[$x]));
+    }
+  }
+  return $res;
+}
 
 /**
  * Handles identification requests.
@@ -223,6 +247,24 @@ function pbkdf2($algorithm, $password, $salt, $count, $key_length, $raw_output =
 function identify(&$request, &$response, &$db) {
   $username = $request->param("username"); // The username
 
+  // Generate a challenge, store it in the DB & send it back
+  $challenge = random_int(0, 10000000);
+
+  // SQL insert challenge into user_login table
+  $sql = 'UPDATE user_login SET challenge="'.$challenge.'" WHERE username="'.$username.'"';
+  log_to_console($sql);
+  $stmt = $db->prepare($sql);
+  $stmt->execute();
+
+  // Get the salt used for hashing the password
+  $stm = $db->query('SELECT * FROM user_login WHERE username="'.$username.'"');
+  $result = $stm->fetchObject();
+
+  $salt = $result->salt;
+
+  // Send challenge back to user
+  $response->set_data("challenge", $challenge); // Send challenge for user login attempt
+  $response->set_data("salt", $salt); // Send salt for user login attempt
   $response->set_http_code(200);
   $response->success("Successfully identified user.");
   log_to_console("Success.");
@@ -237,96 +279,72 @@ function identify(&$request, &$response, &$db) {
  */
 function login(&$request, &$response, &$db) {
   $username = $request->param("username"); // The username with which to log in
-  $password = $request->param("password"); // The password with which to log in
-
-  // TODO: HASH PASSWORD@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-
+  $password = $request->param("password"); // The hashed inputted password with challenge => hash(hash(pwd) || challenge)
   $fullname = "Default Full Name";
 
+  // Find the user's info with the username
+  $stm = $db->query('SELECT * FROM user WHERE username="'.$username.'"');
+  $userResult = $stm->fetchObject();
 
-  // SQL checks whether user exists, and hashed passwords match
-  // Query DB for (user,passwd)
-  // $stm = $db->prepare('SELECT * from user WHERE username=? AND passwd=?');
-  // $stm->bindValue(':userName', $username);
-  // $stm->bindValue(':pass_wd', $password);
+  $DB_PWD = $userResult->passwd;
   
-  // Hash the inputted password with the salt
+  // Hash the DB stored password with the salt
   $stm = $db->query('SELECT * FROM user_login WHERE username="'.$username.'"');
   $result = $stm->fetchObject();
 
   $salt = $result->salt;
+  $challenge = $result->challenge;
+  $DB_PWD = $DB_PWD . $challenge;
+
   $c = 4096;
   $len = 256;
 
-  $hashed_pwd_hex_tag = pbkdf2(sha256, $password, $salt, $c , $len);
-
-  log_to_console("Printing hashed password");
-  log_to_console($hashed_pwd_hex_tag);
-
-  // @@@@@
-  $stm = $db->query('SELECT * FROM user WHERE username="'.$username.'" AND passwd="'.$hashed_pwd_hex_tag.'"');
-
-  $result = $stm->fetchObject();
-  log_to_console("Printing results for");
-  log_to_console($username);
-  log_to_console(serialize($result));
-  log_to_console($result->email);
-
-  $fullname = $result->fullname;
-
-
-  // $result = $db->querySingle('SELECT email FROM user WHERE username="'.$username.'" AND passwd="'.$password.'"');
-
-
-  // echo "@@@@@@@@@@@@@@@@@@@@@@BLAHHHHH\n";
-  // log_to_console($result->fetchArray(SQLITE3_ASSOC));
-
-  // If password and username dont match or dont exist
-  if ($result->username == null) {
-    log_to_console("USER DOESN't EXIST");
+  $hashed_pwd_hex_tag = pbkdf2("sha256", $DB_PWD, $salt, 4096, 256);
+  if (strcmp($hashed_pwd_hex_tag, $password) == 0) {
+    log_to_console("Hashed received password matches");
+  } else {
     $response->set_http_code(401); // OK
     $response->failure("Failed to login.");
     log_to_console("Failed to login.");
     return false;
-  }else {
-    log_to_console("USER EXISTS");
-    $response->set_http_code(200); // Unauthorized user
+  }
+
+  $fullname = $userResult->fullname;
+
+  // If password and username dont match or dont exist, send 401
+  if ($result->username == null) {
+    $response->set_http_code(401); // Unauthorized user
+    $response->failure("Failed to login.");
+    log_to_console("Failed to login.");
+    return false;
+  }else { // Hashed DB pwd matches with sent pwd
+    // Send 200 code
+    $response->set_http_code(200); // Ok
     $response->set_data("fullname", $fullname); // Return the full name to the client for display
     $response->success("Successfully logged in.");
 
     // SQL insert new user into user_session table
-    $sessionID = random_bytes(255);
+    $sessionID = bin2hex(random_bytes(255));
     $sql = 'INSERT into user_session (sessionid, username, expires) VALUES(:session_id,:user_name,:expires)';
     $stmt = $db->prepare($sql);
-    // $stmt->bindValue(':session_id', $sessionID, SQLITE3_TEXT);
-    // $stmt->bindValue(':user_name', $username, SQLITE3_TEXT);
-    // $stmt->bindValue(':expires', date("Y-m-d H:i:s", 0), SQLITE3_TEXT);
+
+    // Expiry date 15 min from now for user_session
+    $now = new DateTime();
+    $interval = new DateInterval("PT15M");
+    $now->add($interval)->format(DateTimeInterface::ISO8601);
+
+    // Execute 'insert into user_session' SQL statement
     $stmt->execute([
       ':session_id' => $sessionID,
       ':user_name' => $username,
-      ":expires" => date("Y-m-d H:i:s", 0)
+      ':expires' => date('Y-m-d H:i:s', $now->getTimeStamp())
     ]);
-    // $stmt->execute();
 
-
-    $relative_time = 1000000000;
     // Create & send a cookie to the client
-    $response->add_cookie("user_session_cookie", $sessionID, time() + $relative_time);
-
+    $response->add_cookie("user_session_cookie", $sessionID);
     log_to_console("Session created.");
     return true;
   }
-
-  // log_to_console($res);
-
-  // $sql = 'INSERT into user (username, passwd, email, fullname) VALUES(:user_name,:pass_wd,:email,:full_name)';
-  // $stmt = $db->prepare($sql);
-  // $stmt->execute([
-  //   ':user_name' => $username,
-  //   ':pass_wd' => $password,
-  //   ':email' => $email,
-  //   ':full_name' => $fullname,
-  // ]);
 
 }
 
@@ -342,81 +360,29 @@ function sites(&$request, &$response, &$db) {
 
   if ($cookie) {
     // First get the username from session cookie
-
-
-    // @@@@@
-    // log_to_console('SELECT username FROM user_session WHERE sessionid="'.$cookie.'"');
-    // WORKS SOME OF THE TIME
-    // $results = $db->query('SELECT username FROM user_session WHERE sessionid="'.$cookie.'"');
-
     $sql = 'SELECT username FROM user_session WHERE sessionid=:session_id';
     $results = $db->prepare($sql);
     $results->execute([
       ':session_id' => $cookie
     ]);
-
-
-    // log_to_console('SELECT site FROM user_safe WHERE username="'.$username.'"');
-
     $result = $results->fetchObject();
-    log_to_console("PRINTING RESULT for ");
-    log_to_console($result->username);
-    log_to_console(serialize($result));
 
-    // GOT USERNAME@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
     // GET site from user_safe using username
-
-
     $sql = 'SELECT * FROM user_safe WHERE username=:user_name';
     $results = $db->prepare($sql);
     $results->execute([
       ':user_name' => $result->username
     ]);
 
-    log_to_console("PRINTING SITE RESULTS for ");
-
-    // $blah_sites = [];
-    $blah_sites = array();
-    $blah_siteIDs = array();
+    //Create arrays with site info for dropdown
+    $sites = array();
+    $siteids = array();
     while ($row = $results->fetch(\PDO::FETCH_ASSOC)) {
-      array_push($blah_sites, $row['site']);
-      array_push($blah_siteIDs, $row['siteid']);
+      array_push($sites, $row['site']);
+      array_push($siteids, $row['siteid']);
     }
 
-    log_to_console(serialize($blah_sites));
-
-
-
-
-    // log_to_console($results);
-
-    // $fullname = $result->fullname;
-
-    // $sites = array(
-    //   "www.google.com"
-    // );
-    $sites = $blah_sites;
-
-    // $siteids = array(
-    //   5
-    // );
-    $siteids = $blah_siteIDs;
-
-    // while ($row = $results->fetchObject()) {
-    //   log_to_console("Adding row");
-    //   $sites[] = [
-    //     'siteids' => $row->siteid,
-    //     'sites' => $row->site
-    //   ];
-    // }
-
-    // log_to_console(serialize($sites));
-
-    // while ($row = $results->fetchArray()) {
-    //   log_to_console($row);
-    // }
-    
-
+    // Send site arrays in Response
     $response->set_data("sites", $sites); // return the sites array to the client
     $response->set_data("siteids", $siteids); // return the sites array to the client
     $response->set_http_code(200);
@@ -441,17 +407,21 @@ function sites(&$request, &$response, &$db) {
  * If the session is invalid, it should return 401 unauthorized.
  */
 function save(&$request, &$response, &$db) {
+  $masteruser       = $request->param("masteruser");
   $site       = $request->param("site");
   $siteuser   = $request->param("siteuser");
-  $sitepasswd = $request->param("sitepasswd");
+  $sitepasswdEncr = $request->param("sitePasswdEncr");
+  $siteIV = $request->param("siteIV");
 
-  // SQL insert new user into user table
-  $sql = 'INSERT into user_safe (site, siteuser, sitepasswd) VALUES(:site,:siteuser,:sitepasswd)';
+  // SQL insert user's site data into user_safe table
+  $sql = 'INSERT into user_safe (username, site, siteuser, sitepasswd, siteiv) VALUES(:username,:site,:siteuser,:sitepasswd,:siteiv)';
   $stmt = $db->prepare($sql);
   $stmt->execute([
+    ':username' => $masteruser,
     ':site' => $site,
     ':siteuser' => $siteuser,
-    ':sitepasswd' => $sitepasswd,
+    ':sitepasswd' => $sitepasswdEncr,
+    ':siteiv' => $siteIV,
   ]);
   
 
@@ -477,23 +447,17 @@ function load(&$request, &$response, &$db) {
 
     // Query DB with siteid
     $stm = $db->query('SELECT * FROM user_safe WHERE siteid="'.$siteid.'"');
-
-
     $result = $stm->fetchObject();
-    log_to_console(serialize($result));
-  
-    // $fullname = $result->fullname;
 
-    // TODO: ENCRYPT SITE INFORMATION@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-    // $site = $request->param("site");
+    // Return in response the user's site information (site, siteuser, sitepasswd, siteIV)
     $site = $result->site;
     $response->set_data("site", $site);
-    // $siteuser = $request->param("siteuser");
     $siteuser = $result->siteuser;
     $response->set_data("siteuser", $siteuser);
-    // $sitepasswd = $request->param("sitepasswd");
     $sitepasswd = $result->sitepasswd;
     $response->set_data("sitepasswd", $sitepasswd);
+    $siteIV = $result->siteiv;
+    $response->set_data("siteIV", $siteIV);
 
     $response->set_http_code(200); // OK
     $response->success("Site data retrieved.");
@@ -516,8 +480,15 @@ function load(&$request, &$response, &$db) {
  */
 function logout(&$request, &$response, &$db) {
   $response->set_http_code(200);
+  $response->delete_cookie("user_session_cookie");
   $response->success("Successfully logged out.");
   log_to_console("Logged out");
+
+  // Delete the user session in DB
+  $cookie = $request->cookie("user_session_cookie"); // Get the user session cookie
+  $sql = 'DELETE from user_session  WHERE sessionid="'.$cookie.'"';
+  $stmt = $db->prepare($sql);
+  $stmt->execute();
 
   return true;
 }

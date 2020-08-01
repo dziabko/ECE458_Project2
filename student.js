@@ -98,7 +98,11 @@ async function credentials(username, password) {
   return idResult.json;
 }
 
-var globalPWD;
+var masterUser;
+var masterPWD;
+var c = 4096;
+var len = 256;
+var salt;
 
 /**
  * Called when the user submits the log-in form.
@@ -107,35 +111,77 @@ function login(userInput, passInput) {
   // get the form fields
   var username = userInput.value,
     password = passInput.value;
-  globalPWD = password;
+    masterPWD = password
+    masterUser = username;
+
 
   credentials(username, password).then(function (idJson) {
     // do any needed work with the credentials
+    var salt = idJson.salt;
+    var challenge = idJson.challenge;
 
-    // Send a login request to the server.
-    serverRequest("login", // resource to call
-      { "username": username, "password": password } // this should be populated with needed parameters
-    ).then(function (result) {
-      // If the login was successful, show the dashboard.
-      if (result.response.ok) {
-        // do any other work needed after successful login here
+    // First perform hash(pwd)
+    PBKDF2_SHA256(masterPWD, salt, 4096, 256).then(function (hashedPassword1) {
+      var pwdChl = hashedPassword1 + challenge;
 
-        // display the user's full name in the userdisplay field
-        let userdisplay = document.getElementById("userdisplay");
-        // userdisplay refers to the DOM element that students will need to
-        // update to show the data returned by the server.
-        userdisplay.innerHTML = result.json.fullname;
-        console.log(result.json);
+      // Then perform hash(hash(pwd) || challenge) & send to server
+      PBKDF2_SHA256(pwdChl, salt, 4096, 256).then(function (hashedPassword2) {
+        // Send a login request to the server with the hashed password.
+        serverRequest("login", // resource to call
+          { "username": username, "password": hashedPassword2 } // this should be populated with needed parameters
+        ).then(function (result) {
+          // If the login was successful, show the dashboard.
+          if (result.response.ok) {
+            // do any other work needed after successful login here
 
-        showContent("dashboard");
+            // display the user's full name in the userdisplay field
+            let userdisplay = document.getElementById("userdisplay");
+            // userdisplay refers to the DOM element that students will need to
+            // update to show the data returned by the server.
+            userdisplay.innerHTML = result.json.fullname;
 
-      } else {
-        // If the login failed, show the login page with an error message.
-        serverStatus(result);
-      }
-    });
+            showContent("dashboard");
+
+          } else {
+            // If the login failed, show the login page with an error message.
+            serverStatus(result);
+          }
+        });
+
+      });
+  });
 
   });
+}
+
+// PBKDF2 implemented with SHA256 hashing
+async function PBKDF2_SHA256(password, salt, c, len) {
+  console.log("STARTING PBKDF2");
+  var last = salt.concat("1");
+
+  var xorsum = "0000000000000000000000000000000000000000000000000000000000000000";
+  var hashed;
+  
+  last = await hash(last.concat(password));
+  hashed = last;
+
+  for (var i = 1; i < 4096; i++) {
+    last = await hash(last.concat(password));
+    xorsum = XOR_hex(xorsum, last);
+  }
+
+  return xorsum;
+}
+
+
+// https://stackoverflow.com/questions/30651062/how-to-use-the-xor-on-two-strings
+function XOR_hex(a, b) {
+  var res = "",
+    i = a.length,
+    j = b.length;
+  while (i-- > 0 && j-- > 0)  
+    res = (parseInt(a.charAt(i), 16) ^ parseInt(b.charAt(j), 16)).toString(16) + res;
+  return res;
 }
 
 /**
@@ -154,19 +200,6 @@ function signup(userInput, passInput, passInput2, emailInput, fullNameInput) {
   if (password != password2) {
 
   } else {
-    console.log("TESTTTT")
-
-    // HMAC@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-    
-
-    // 1st HASH
-    // We want to hash the password, and provide that to the server to store
-    hash(password).then(function (result) {
-      console.log("HASHED password")
-      console.log("RESULT: " + result)
-    });
-    
-
     // send the signup form to the server
     serverRequest("signup",  // resource to call
       { "username": username, "password": password, "email": email, "fullname": fullname } // this should be populated with needed parameters
@@ -184,7 +217,11 @@ function signup(userInput, passInput, passInput2, emailInput, fullNameInput) {
   }
 }
 
-// function HMAC()
+String.prototype.convertToHex = function (delim) {
+  return this.split("").map(function (c) {
+    return ("0" + c.charCodeAt(0).toString(16)).slice(-2);
+  }).join(delim || "");
+};
 
 
 /**
@@ -197,26 +234,33 @@ function save(siteIdInput, siteInput, userInput, passInput) {
     sitepasswd = passInput.value,
     encrypted; // this will need to be populated
 
+  var iv = randomBytes(16);
+
+  // Send the elements to server for storage
+  // Pad the master password with '0's
+  var hexPWD32B = masterPWD.padEnd(32, '0').convertToHex();
+
+  // Encrypt the password first
+  encrypt(sitepasswd, hexPWD32B, iv).then(function (cipher) {
+    // cipher is the ciphertext
+    encrypted = cipher;
+
+    // send the data, along with the encrypted password, to the server
+    serverRequest("save",  // the resource to call
+      {"masteruser": masterUser, "siteid": siteid, "site": site, "siteuser": siteuser, "sitePasswdEncr": encrypted, "siteIV": iv} // this should be populated with any parameters the server needs
+    ).then(function (result) {
+      if (result.response.ok) {
+        console.log("Saved password");
+        // any work after a successful save should be done here
+
+        // update the sites list
+        sites("save");
+      }
+      // show any server status messages
+      serverStatus(result);
+    });
 
 
-  // TODO: Encrypt the elements @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-  console.log("SAVING PASSWORDS");
-  
-  // send the data, along with the encrypted password, to the server
-  serverRequest("save",  // the resource to call
-    { "siteid": siteid, "site": site, "siteuser": siteuser, "sitepasswd": encrypted } // this should be populated with any parameters the server needs
-  ).then(function (result) {
-    if (result.response.ok) {
-      console.log("Saved password");
-      // any work after a successful save should be done here
-      // Send the elements to server for storage
-      
-
-      // update the sites list
-      sites("save");
-    }
-    // show any server status messages
-    serverStatus(result);
   });
 }
 
@@ -235,15 +279,17 @@ function loadSite(siteid, siteIdElement, siteElement, userElement, passElement) 
   ).then(function (result) {
     if (result.response.ok) {
       // do any work that needs to be done on success
-      console.log("LOADING SITE DETAIILS");
-
       siteElement.value = result.json.site;
       // userdisplay refers to the DOM element that students will need to
       // update to show the data returned by the server.
       siteElement.value = result.json.site;
       userElement.value = result.json.siteuser;
-      passElement.value = result.json.sitepasswd;
-      console.log(result.json);
+
+      // Decrypt the site's password before displaying it
+      var hexPWD32B = masterPWD.padEnd(32, '0').convertToHex();
+      decrypt(result.json.sitepasswd, hexPWD32B, result.json.siteIV).then(function (plaintext) {
+        passElement.value = plaintext;
+      });
 
     } else {
       // on failure, show the login page and display any server status
