@@ -198,7 +198,13 @@ function signup(userInput, passInput, passInput2, emailInput, fullNameInput) {
   // do any preprocessing on the user input here before sending to the server
   // Check if passwords match
   if (password != password2) {
+  } else if (password.length < 8) {
+    // Ensure password is long enough
+    let signup = document.getElementById("signup");
 
+    var errorText = document.createElement("div");
+    errorText.innerText = "Please choose a password longer than 8 characters";
+    signup.appendChild(errorText)
   } else {
     // send the signup form to the server
     serverRequest("signup",  // resource to call
